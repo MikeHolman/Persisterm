@@ -1,0 +1,84 @@
+{
+  "name": "persisterm",
+  "displayName": "Persisterm — Persistent Terminals",
+  "description": "Terminal sessions that survive SSH disconnects, powered by tmux",
+  "version": "0.1.0",
+  "publisher": "MichaelHolman",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MikeHolman/persisterm"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "persisterm.newTerminal",
+        "title": "Persisterm: New Persistent Terminal",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "persisterm.reattachAll",
+        "title": "Persisterm: Reattach All Sessions"
+      },
+      {
+        "command": "persisterm.killAllSessions",
+        "title": "Persisterm: Kill All Persistent Sessions"
+      }
+    ],
+    "terminal": {
+      "profiles": [
+        {
+          "id": "persisterm.terminalProfile",
+          "title": "Persistent Terminal (tmux)"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "persisterm.newTerminal",
+        "key": "ctrl+shift+`",
+        "mac": "cmd+shift+`"
+      }
+    ],
+    "configuration": {
+      "title": "Persisterm",
+      "properties": {
+        "persisterm.autoReattach": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically reattach to surviving tmux sessions on startup."
+        },
+        "persisterm.sessionPrefix": {
+          "type": "string",
+          "default": "persisterm",
+          "description": "Prefix for tmux session names. Change this if you run multiple workspaces on the same host."
+        },
+        "persisterm.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show persistent-session count in the status bar."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}
