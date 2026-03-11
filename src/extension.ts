@@ -297,6 +297,9 @@ export async function activate(
   isDeactivating = false;
 
   /* ---- tmux gate check ---- */
+  if (process.platform === "win32") {
+    return; // tmux is Unix-only; nothing to do on native Windows.
+  }
   if (!tmux.isInstalled()) {
     const choice = await vscode.window.showErrorMessage(
       "Persisterm requires tmux but it was not found on this machine.",
@@ -305,11 +308,16 @@ export async function activate(
     if (choice) {
       const t = vscode.window.createTerminal("Install tmux");
       t.show();
+      // Detect the package manager and install tmux.
       t.sendText(
-        "sudo apt-get update && sudo apt-get install -y tmux || sudo dnf install -y tmux || sudo pacman -S --noconfirm tmux || brew install tmux",
+        'if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y tmux; ' +
+        'elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y tmux; ' +
+        'elif command -v pacman >/dev/null 2>&1; then sudo pacman -S --noconfirm tmux; ' +
+        'elif command -v brew >/dev/null 2>&1; then brew install tmux; ' +
+        'else echo "No supported package manager found. Please install tmux manually."; fi',
       );
     }
-    return; // nothing else we can do until tmux is available
+    return;
   }
 
   /* ---- write tmux config for transparent operation ---- */
