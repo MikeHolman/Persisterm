@@ -1,5 +1,6 @@
 .vscode/**
 src/**
+!src/tmux-proxy.py
 node_modules/**
 .git/**
 .gitignore

@@ -177,7 +177,9 @@ function createPersistentTerminal(sessionName?: string): vscode.Terminal {
     return existing;
   }
 
-  const { shellPath, shellArgs } = tmux.shellCommand(sessionName);
+  // Detect whether this is a reattach (session already exists in tmux).
+  const reattach = tmux.hasSession(sessionName);
+  const { shellPath, shellArgs } = tmux.shellCommand(sessionName, reattach);
 
   const terminal = vscode.window.createTerminal({
     name: formatTerminalName(sessionName),
@@ -320,37 +322,27 @@ export async function activate(
     return;
   }
 
-  /* ---- write tmux config for transparent operation ---- */
+  /* ---- write tmux config & proxy for transparent operation ---- */
   tmux.ensureConfig();
+  tmux.ensureProxy();
 
-  /* ---- minimize VS Code scrollback (tmux handles scrolling) ---- */
-  // tmux virtualises the screen so VS Code's own scrollback is always
-  // empty.  Setting it to the minimum hides the misleading scrollbar.
+  /* ---- restore VS Code scrollback if previously zeroed ---- */
+  // Older versions of this extension set scrollback to 0 (tmux handled
+  // scrolling).  The proxy now gives native VS Code scrollback, so
+  // undo that setting if we were the ones who set it.
   {
     const termCfg = vscode.workspace.getConfiguration("terminal.integrated");
     const inspected = termCfg.inspect<number>("scrollback");
-    if (
-      inspected &&
-      inspected.globalValue === undefined &&
-      inspected.workspaceValue === undefined &&
-      inspected.workspaceFolderValue === undefined
-    ) {
-      termCfg.update("scrollback", 0, vscode.ConfigurationTarget.Global);
+    if (inspected?.globalValue === 0) {
+      termCfg.update("scrollback", undefined, vscode.ConfigurationTarget.Global);
     }
-  }
-
-  /* ---- ensure shift+enter keybinding is intercepted in terminal ---- */
-  // By default VS Code passes shift+enter straight to the terminal pty
-  // (dropping the Shift modifier).  We need to tell VS Code to intercept
-  // it so our keybinding fires instead of the terminal eating it.
-  {
-    const termCfg = vscode.workspace.getConfiguration("terminal.integrated");
-    const current = termCfg.get<string[]>("commandsToSkipShell") || [];
-    const CMD = "persisterm.sendShiftEnter";
-    if (!current.includes(CMD)) {
+    // Clean up commandsToSkipShell entry from older versions.
+    const cmds = termCfg.get<string[]>("commandsToSkipShell") || [];
+    const filtered = cmds.filter((c) => c !== "persisterm.sendShiftEnter");
+    if (filtered.length !== cmds.length) {
       termCfg.update(
         "commandsToSkipShell",
-        [...current, CMD],
+        filtered.length > 0 ? filtered : undefined,
         vscode.ConfigurationTarget.Global,
       );
     }
@@ -380,7 +372,7 @@ export async function activate(
             );
             if (unassigned) {
               restoredSessions.add(unassigned.name);
-              const { shellPath, shellArgs } = tmux.shellCommand(unassigned.name);
+              const { shellPath, shellArgs } = tmux.shellCommand(unassigned.name, true);
               return new vscode.TerminalProfile({
                 name: formatTerminalName(unassigned.name),
                 shellPath,
@@ -439,25 +431,6 @@ export async function activate(
   context.subscriptions.push(
     vscode.commands.registerCommand("persisterm.newTerminal", () => {
       createPersistentTerminal().show();
-    }),
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand("persisterm.sendShiftEnter", () => {
-      const terminal = vscode.window.activeTerminal;
-      if (!terminal) {
-        return;
-      }
-      const sessionName = terminalToSession.get(terminal);
-      if (sessionName) {
-        // Send ESC + CR directly to the tmux pane, bypassing the
-        // client input parser which can mishandle the ESC byte.
-        tmux.sendKeys(sessionName, "\x1b\r");
-      } else {
-        // Not a persisterm terminal — fall back to the standard
-        // sendSequence approach so the keybinding still works.
-        terminal.sendText("\x1b\r", false);
-      }
     }),
   );
 

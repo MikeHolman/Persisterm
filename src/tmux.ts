@@ -27,6 +27,7 @@ const CONFIG_DIR = path.join(os.homedir(), ".config", "persisterm");
 const CONFIG_PATH = path.join(CONFIG_DIR, "tmux.conf");
 const VSCODE_ENV_PATH = path.join(CONFIG_DIR, "vscode-env");
 const SHELL_INIT_PATH = path.join(CONFIG_DIR, "shell-init.sh");
+const PROXY_PATH = path.join(CONFIG_DIR, "tmux-proxy.py");
 
 /**
  * Environment variables that VS Code sets for its integrated terminal
@@ -55,37 +56,10 @@ set-option -g status off
 # Zero escape-key delay (critical for vim / emacs users)
 set-option -g escape-time 0
 
-# Generous scrollback inside tmux (survives reattach)
+# ── Scrollback ───────────────────────────────────────────────────────
+# Generous scrollback inside tmux.  The proxy uses capture-pane to
+# replay this buffer into VS Code's native scrollback on reconnect.
 set-option -g history-limit 50000
-
-# Forward focus events to applications that care (e.g. vim 'autoread')
-set-option -g focus-events on
-
-# Suppress activity / bell notifications
-set-option -g visual-activity off
-set-option -g visual-bell off
-set-option -g visual-silence off
-
-# ── Scrolling & mouse ────────────────────────────────────────────────
-# tmux virtualises the screen so VS Code's own scrollback is empty.
-# Mouse mode lets tmux handle scroll events through its own 50k-line
-# buffer.  The settings below make it feel as native as possible:
-#
-#   • Scroll 3 lines per wheel tick (VS Code default).
-#   • Automatically leave copy-mode when you scroll back to the bottom.
-#   • Hold Shift + mouse to bypass tmux for VS Code native selection.
-#
-set-option -g mouse on
-
-# Faster scrolling — 3 lines per wheel tick instead of tmux default (5
-# in copy-mode, 1 outside).  These bindings cover both emacs & vi mode.
-bind-key -T copy-mode    WheelUpPane   send-keys -X -N 3 scroll-up
-bind-key -T copy-mode    WheelDownPane send-keys -X -N 3 scroll-down
-bind-key -T copy-mode-vi WheelUpPane   send-keys -X -N 3 scroll-up
-bind-key -T copy-mode-vi WheelDownPane send-keys -X -N 3 scroll-down
-
-# Minimal visual noise in copy-mode (no bright yellow bar).
-set-option -g mode-style "bg=colour238,fg=colour250"
 
 # ── VS Code integration ─────────────────────────────────────────────
 # When a client attaches, automatically update the session environment
@@ -120,11 +94,36 @@ function resolvedTmuxConfig(): string {
  */
 export function ensureConfig(): void {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(CONFIG_PATH, resolvedTmuxConfig(), { encoding: "utf-8" });
+
+  const newConfig = resolvedTmuxConfig();
+
+  // If the config changed, kill the running tmux server so it restarts
+  // with the new config.  Sessions survive a config-only restart because
+  // `kill-server` is not used — we rely on the server picking up the new
+  // config file on the next `new-session` invocation.  However, a major
+  // config change (like switching from mouse-mode to control-mode proxy)
+  // can leave a server whose runtime state is incompatible.  Detect this
+  // by comparing the on-disk config with the new one.
+  let configChanged = false;
+  try {
+    const existing = fs.readFileSync(CONFIG_PATH, "utf-8");
+    configChanged = existing !== newConfig;
+  } catch {
+    configChanged = true; // no existing config
+  }
+
+  fs.writeFileSync(CONFIG_PATH, newConfig, { encoding: "utf-8" });
+
+  if (configChanged) {
+    // Kill the running server so it restarts with the new config.
+    // Sessions are lost, but this only happens on extension upgrades.
+    try {
+      execSync(`tmux -L ${SOCKET} kill-server 2>/dev/null`, { stdio: "pipe" });
+    } catch { /* server wasn't running — fine */ }
+  }
 
   // Clean up stale tmux socket if the server is dead.  A stale socket
   // causes tmux to fail with "server exited unexpectedly" (exit code 1).
-  // This can happen after a config change kills compatibility.
   try {
     execSync(`tmux -L ${SOCKET} list-sessions 2>/dev/null`, { stdio: "pipe" });
   } catch {
@@ -150,6 +149,27 @@ export function ensureConfig(): void {
     `. '${VSCODE_ENV_PATH.replace(/'/g, "'\\''")}'  2>/dev/null`,
   ].join("\n") + "\n";
   fs.writeFileSync(SHELL_INIT_PATH, shellInit, { encoding: "utf-8" });
+}
+
+/**
+ * Write the tmux control-mode proxy script to the config directory.
+ *
+ * The proxy bridges VS Code's terminal pty and tmux's control mode,
+ * giving native VS Code scrollback while tmux handles persistence.
+ */
+export function ensureProxy(): void {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  const src = path.join(__dirname, "..", "src", "tmux-proxy.py");
+  // Try reading from the source tree first (development), then fall
+  // back to reading from next to the compiled JS (packaged extension).
+  let content: string;
+  try {
+    content = fs.readFileSync(src, "utf-8");
+  } catch {
+    const alt = path.join(__dirname, "tmux-proxy.py");
+    content = fs.readFileSync(alt, "utf-8");
+  }
+  fs.writeFileSync(PROXY_PATH, content, { encoding: "utf-8", mode: 0o755 });
 }
 
 /**
@@ -316,22 +336,6 @@ export function killSession(name: string): boolean {
   }
 }
 
-/**
- * Send literal bytes directly to the pane inside a tmux session.
- * This bypasses tmux's client-side input parser, ensuring escape
- * sequences (e.g. ESC + CR for Shift+Enter) arrive intact.
- */
-export function sendKeys(sessionName: string, keys: string): boolean {
-  try {
-    execSync(`${baseCmd()} send-keys -t ${esc(sessionName)} -l -- ${esc(keys)}`, {
-      stdio: "pipe",
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
@@ -360,23 +364,26 @@ export function nextIndex(prefix: string): number {
 }
 
 /**
- * Build the shell invocation that creates-or-attaches a tmux session.
+ * Build the shell invocation that creates-or-attaches a tmux session
+ * via the control-mode proxy.
  *
- * `tmux new-session -A -s <name>` creates the session when it doesn't
- * exist and attaches to it when it does — exactly what we need for both
- * the "new terminal" and the "reattach" flows.
+ * The proxy script (`tmux-proxy.py`) uses tmux's `-CC` control mode to
+ * bridge between VS Code's terminal pty and the tmux session.  This
+ * gives native VS Code scrollback while tmux handles persistence.
  *
- * Before attaching we:
- *   1. Source the VS Code env file (so the tmux client inherits fresh
- *      vars and tmux's `update-environment` propagates them).
+ * Before launching the proxy we:
+ *   1. Source the VS Code env file (so env vars propagate to tmux).
  *   2. For existing sessions, push each env var into the tmux session
- *      via `tmux set-environment` (completely invisible — no terminal
- *      noise, no history entries).
+ *      via `tmux set-environment` (completely invisible).
  *
- * The running shell inside tmux auto-refreshes its own env via a
- * PROMPT_COMMAND hook installed by the env file (see `writeVscodeEnv`).
+ * When `reattach` is true the proxy dumps the pane's scrollback history
+ * into VS Code's terminal before connecting, so the user sees their
+ * previous output in the native scrollback.
  */
-export function shellCommand(sessionName: string): {
+export function shellCommand(
+  sessionName: string,
+  reattach = false,
+): {
   shellPath: string;
   shellArgs: string[];
 } {
@@ -385,20 +392,29 @@ export function shellCommand(sessionName: string): {
   const sess = esc(sessionName);
 
   // Build set-environment commands for each tracked variable.
-  // We reference them via $VAR (they'll be set from sourcing the env file).
   const setEnvCmds = VSCODE_ENV_VARS.map(
     (v) => `    ${base} set-environment -t ${sess} ${v} "\$${v}" 2>/dev/null`,
   ).join("\n");
 
+  const proxyArgs = [
+    esc(PROXY_PATH),
+    sess,
+    "--socket", SOCKET,
+    "--config", esc(CONFIG_PATH),
+  ];
+  if (reattach) {
+    proxyArgs.push("--reattach");
+  }
+
   const cmd = [
-    // 1. Source VS Code env into this shell (inherited by tmux client)
+    // 1. Source VS Code env into this shell
     `. ${envFile} 2>/dev/null`,
     // 2. If session exists, silently push env vars into the session
     `if ${base} has-session -t ${sess} 2>/dev/null; then`,
     setEnvCmds,
     `fi`,
-    // 3. Attach or create
-    `exec ${base} new-session -A -s ${sess}`,
+    // 3. Launch the control-mode proxy
+    `exec python3 ${proxyArgs.join(" ")}`,
   ].join("\n");
 
   return {

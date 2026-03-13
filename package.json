@@ -33,10 +33,6 @@
       {
         "command": "persisterm.killAllSessions",
         "title": "Persisterm: Kill All Persistent Sessions"
-      },
-      {
-        "command": "persisterm.sendShiftEnter",
-        "title": "Persisterm: Send Shift+Enter to Terminal"
       }
     ],
     "terminal": {
@@ -52,11 +48,6 @@
         "command": "persisterm.newTerminal",
         "key": "ctrl+shift+`",
         "mac": "cmd+shift+`"
-      },
-      {
-        "command": "persisterm.sendShiftEnter",
-        "key": "shift+enter",
-        "when": "terminalFocus"
       }
     ],
     "configuration": {
@@ -81,6 +72,7 @@
     }
   },
   "scripts": {
+    "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts"

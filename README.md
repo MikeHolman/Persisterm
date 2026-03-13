@@ -7,30 +7,34 @@ Persisterm backs every terminal with a [tmux](https://github.com/tmux/tmux) sess
 ## How it works
 
 ```
- VS Code Terminal tab          tmux session
-┌─────────────────────┐       ┌──────────────────┐
-│  Persist: 0         │ ───── │  persisterm-0    │
-│  Persist: 1         │ ───── │  persisterm-1    │
-└─────────────────────┘       └──────────────────┘
-         │                             │
-    (disconnect)                  (keeps running)
-         │                             │
-    (reconnect)                        │
-         │                             │
-┌─────────────────────┐               │
-│  Persist: 0 ◄───────────────────────┘
-│  Persist: 1 ◄───────────────────────
+ VS Code Terminal tab       proxy       tmux session
+┌─────────────────────┐   ┌───────┐   ┌──────────────────┐
+│  Persist: 0         │◄─►│ proxy │◄─►│  persisterm-0    │
+│  Persist: 1         │◄─►│ proxy │◄─►│  persisterm-1    │
+└─────────────────────┘   └───────┘   └──────────────────┘
+         │                                     │
+    (disconnect)                          (keeps running)
+         │                                     │
+    (reconnect)                                │
+         │                                     │
+┌─────────────────────┐   ┌───────┐            │
+│  Persist: 0 (with   │◄─►│ proxy │◄───────────┘
+│   scrollback!)      │   └───────┘
 └─────────────────────┘
 ```
 
-1. **New terminal** → `tmux new-session -A -s persisterm-N`
-2. **SSH drops** → tmux client dies, session stays alive on the host
-3. **Reconnect** → extension lists `persisterm-*` sessions, opens terminals that reattach
+A lightweight Python proxy bridges VS Code's terminal and tmux's **control mode** (`-CC`).  Program output flows through VS Code's native terminal renderer, giving you **native scrollback, selection, and search**.  tmux runs in the background purely for session persistence.
+
+1. **New terminal** → proxy connects to tmux in control mode
+2. **SSH drops** → proxy dies, tmux session stays alive on the host
+3. **Reconnect** → proxy replays tmux scrollback into VS Code, then resumes live output
 
 ## Requirements
 
 - **tmux** must be installed on the remote (or local) machine.
   The extension will prompt you to install it if it's missing.
+- **Python 3** must be available (used by the control-mode proxy).
+  This is pre-installed on virtually all Linux systems.
 
 ## Quick start
 
@@ -60,6 +64,11 @@ Persisterm backs every terminal with a [tmux](https://github.com/tmux/tmux) sess
 `Ctrl+Shift+`` — create a new persistent terminal (customisable in Keyboard Shortcuts).
 
 ## Tips
+
+- **Scrollback just works**: unlike a regular tmux attach, Persisterm uses
+  tmux's control mode so output flows through VS Code's native terminal.
+  Scroll, select, and search work exactly like a normal terminal.
+  On reconnect, previous output is replayed into the scrollback.
 
 - **Make it the default terminal**: open Settings and set  
   `terminal.integrated.defaultProfile.linux` to `Persistent Terminal (tmux)`.  
