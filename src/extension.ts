@@ -339,6 +339,23 @@ export async function activate(
     }
   }
 
+  /* ---- ensure shift+enter keybinding is intercepted in terminal ---- */
+  // By default VS Code passes shift+enter straight to the terminal pty
+  // (dropping the Shift modifier).  We need to tell VS Code to intercept
+  // it so our keybinding fires instead of the terminal eating it.
+  {
+    const termCfg = vscode.workspace.getConfiguration("terminal.integrated");
+    const current = termCfg.get<string[]>("commandsToSkipShell") || [];
+    const CMD = "persisterm.sendShiftEnter";
+    if (!current.includes(CMD)) {
+      termCfg.update(
+        "commandsToSkipShell",
+        [...current, CMD],
+        vscode.ConfigurationTarget.Global,
+      );
+    }
+  }
+
   /* ---- snapshot VS Code env vars for tmux sessions ---- */
   tmux.writeVscodeEnv();
 
@@ -422,6 +439,25 @@ export async function activate(
   context.subscriptions.push(
     vscode.commands.registerCommand("persisterm.newTerminal", () => {
       createPersistentTerminal().show();
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("persisterm.sendShiftEnter", () => {
+      const terminal = vscode.window.activeTerminal;
+      if (!terminal) {
+        return;
+      }
+      const sessionName = terminalToSession.get(terminal);
+      if (sessionName) {
+        // Send ESC + CR directly to the tmux pane, bypassing the
+        // client input parser which can mishandle the ESC byte.
+        tmux.sendKeys(sessionName, "\x1b\r");
+      } else {
+        // Not a persisterm terminal — fall back to the standard
+        // sendSequence approach so the keybinding still works.
+        terminal.sendText("\x1b\r", false);
+      }
     }),
   );
 

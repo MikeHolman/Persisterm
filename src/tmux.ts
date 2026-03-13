@@ -316,6 +316,22 @@ export function killSession(name: string): boolean {
   }
 }
 
+/**
+ * Send literal bytes directly to the pane inside a tmux session.
+ * This bypasses tmux's client-side input parser, ensuring escape
+ * sequences (e.g. ESC + CR for Shift+Enter) arrive intact.
+ */
+export function sendKeys(sessionName: string, keys: string): boolean {
+  try {
+    execSync(`${baseCmd()} send-keys -t ${esc(sessionName)} -l -- ${esc(keys)}`, {
+      stdio: "pipe",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
