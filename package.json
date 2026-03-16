@@ -2,7 +2,7 @@
   "name": "persisterm",
   "displayName": "Persisterm — Persistent Terminals",
   "description": "Terminal sessions that survive SSH disconnects, powered by tmux",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "publisher": "MichaelHolman",
   "license": "MIT",
   "engines": {
