@@ -489,7 +489,7 @@ export async function activate(
         return;
       }
       const sessionName = untrack(terminal);
-      if (sessionName && !isDeactivating) {
+      if (sessionName && !isDeactivating && !isRestoring) {
         // Schedule the kill after a short delay.  If the window is
         // shutting down, deactivate() will cancel this before it fires.
         const timer = setTimeout(() => {

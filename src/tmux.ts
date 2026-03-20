@@ -379,6 +379,12 @@ export function nextIndex(prefix: string): number {
  * When `reattach` is true the proxy dumps the pane's scrollback history
  * into VS Code's terminal before connecting, so the user sees their
  * previous output in the native scrollback.
+ *
+ * An auto-reconnect loop wraps the proxy invocation: if the proxy
+ * exits unexpectedly but the tmux session is still alive (e.g. a
+ * transient error during reconnection), the shell retries up to 5
+ * times with a one-second delay between attempts.  `--reattach` is
+ * only passed on the first attempt (scrollback was already replayed).
  */
 export function shellCommand(
   sessionName: string,
@@ -402,19 +408,31 @@ export function shellCommand(
     "--socket", SOCKET,
     "--config", esc(CONFIG_PATH),
   ];
-  if (reattach) {
-    proxyArgs.push("--reattach");
-  }
+  const proxyCmd = `python3 ${proxyArgs.join(" ")}`;
+  // First attempt may replay scrollback history.
+  const firstCmd = reattach ? `${proxyCmd} --reattach` : proxyCmd;
 
   const cmd = [
+    // Exit cleanly on SIGTERM/SIGHUP (VS Code closing the terminal tab).
+    `trap 'exit 0' TERM HUP`,
     // 1. Source VS Code env into this shell
     `. ${envFile} 2>/dev/null`,
     // 2. If session exists, silently push env vars into the session
     `if ${base} has-session -t ${sess} 2>/dev/null; then`,
     setEnvCmds,
     `fi`,
-    // 3. Launch the control-mode proxy
-    `exec python3 ${proxyArgs.join(" ")}`,
+    // 3. Launch the proxy (first attempt may replay scrollback)
+    firstCmd,
+    // 4. Auto-reconnect: if the proxy exits but the tmux session is
+    //    still alive, the connection was interrupted — retry.
+    `_pn=0`,
+    `while ${base} has-session -t ${sess} 2>/dev/null; do`,
+    `  _pn=$((_pn + 1))`,
+    `  [ $_pn -ge 5 ] && printf '\\033[33mPersisterm: giving up after 5 reconnect attempts.\\033[0m\\n' && break`,
+    `  printf '\\033[33mPersisterm: reconnecting (attempt %d/5)...\\033[0m\\n' "$_pn"`,
+    `  sleep 1`,
+    `  ${proxyCmd}`,
+    `done`,
   ].join("\n");
 
   return {
