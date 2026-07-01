@@ -76,7 +76,125 @@ def bytes_to_hex(data):
     return " ".join(f"{b:02x}" for b in data)
 
 
+# ── Background colour sync ──────────────────────────────────────────
+# tmux answers an app's OSC 11 (background) query itself, with black, since it
+# can't know VS Code's real theme background.  Apps (e.g. Copilot CLI) that
+# shade their input box from that answer then render it black.  We query VS
+# Code's real background once and push it into tmux's window-style so tmux
+# answers correctly.
+
+_OSC11_RE = re.compile(
+    rb"\x1b\]11;rgb:([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})(?:\x07|\x1b\\)"
+)
+
+
+def _osc_comp_to_8bit(h):
+    """Normalise a 1–4 hex-digit OSC colour component to an 8-bit value."""
+    v = int(h, 16)
+    n = len(h)
+    if n == 1:
+        v *= 0x11
+    elif n == 3:
+        v >>= 4
+    elif n == 4:
+        v >>= 8
+    return v & 0xFF
+
+
+def query_terminal_bg(timeout=0.3):
+    """Ask VS Code for its background colour via OSC 11.
+
+    Returns (hex_color | None, leftover_stdin_bytes).  Any non-response bytes
+    read while waiting (e.g. an early keystroke) are returned so the caller can
+    feed them back into the input stream instead of dropping them.
+    """
+    try:
+        sys.stdout.write("\x1b]11;?\x07")
+        sys.stdout.flush()
+    except Exception:
+        return None, b""
+
+    fd = sys.stdin.fileno()
+    buf = bytearray()
+    end = time.monotonic() + timeout
+    while True:
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            readable, _, _ = select.select([fd], [], [], remaining)
+        except (select.error, ValueError, OSError):
+            break
+        if fd not in readable:
+            continue
+        try:
+            data = os.read(fd, 4096)
+        except OSError:
+            break
+        if not data:
+            break
+        buf += data
+        m = _OSC11_RE.search(buf)
+        if m:
+            color = "#%02x%02x%02x" % tuple(
+                _osc_comp_to_8bit(m.group(i).decode()) for i in (1, 2, 3)
+            )
+            del buf[m.start():m.end()]  # our response — don't forward it
+            return color, bytes(buf)
+    return None, bytes(buf)
+
+
 # ── Replay history on reconnect ────────────────────────────────────
+
+# Pane state fields queried from tmux to rebuild terminal modes on reconnect
+# (positional order; "|"-separated so empty values stay aligned).
+_STATE_FIELDS = [
+    "alternate_on", "pane_height", "cursor_x", "cursor_y", "cursor_flag",
+    "mouse_standard_flag", "mouse_button_flag", "mouse_all_flag",
+    "mouse_sgr_flag", "keypad_cursor_flag", "keypad_flag",
+]
+
+
+def query_pane_state():
+    """Return the pane's mode flags + cursor as a dict.
+
+    Control mode sends no redraw/mode sequences on attach, so we rebuild them.
+    """
+    state = {f: 0 for f in _STATE_FIELDS}
+    state["pane_height"] = 24
+    fmt = "|".join("#{%s}" % f for f in _STATE_FIELDS)
+    cmd = tmux_base_cmd() + ["display-message", "-p", "-t", args.session, fmt]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    if result.returncode == 0:
+        parts = result.stdout.strip().split("|")
+        for name, val in zip(_STATE_FIELDS, parts):
+            try:
+                state[name] = int(val)
+            except ValueError:
+                pass
+    return state
+
+
+def build_mode_restore(state):
+    """Re-emit the private modes the app had set (else scroll/mouse break)."""
+    out = bytearray()
+
+    # Most specific active mouse tracking mode (1000/1002/1003 are exclusive).
+    if state.get("mouse_all_flag"):
+        out += b"\x1b[?1003h"
+    elif state.get("mouse_button_flag"):
+        out += b"\x1b[?1002h"
+    elif state.get("mouse_standard_flag"):
+        out += b"\x1b[?1000h"
+    if state.get("mouse_sgr_flag"):
+        out += b"\x1b[?1006h"
+
+    # App cursor keys (DECCKM) and keypad (DECKPAM/DECKPNM).
+    out += b"\x1b[?1h" if state.get("keypad_cursor_flag") else b"\x1b[?1l"
+    out += b"\x1b=" if state.get("keypad_flag") else b"\x1b>"
+
+    return bytes(out)
+
 
 def replay_history():
     """Replay session history into VS Code's terminal before reconnecting.
@@ -84,48 +202,27 @@ def replay_history():
     Returns True if the pane is in alternate screen mode (fullscreen app).
     """
     try:
-        # Check if the pane is in alternate screen mode (full-screen apps
-        # like vim, htop, copilot CLI).
-        alt_cmd = tmux_base_cmd() + [
-            "display-message", "-p", "-t", args.session,
-            "#{alternate_on} #{pane_height}"
-        ]
-        alt_result = subprocess.run(alt_cmd, capture_output=True, text=True, timeout=5)
-        alternate_on = False
-        pane_height = 24
-        if alt_result.returncode == 0:
-            parts = alt_result.stdout.strip().split()
-            if len(parts) >= 2:
-                alternate_on = parts[0] == "1"
-                try:
-                    pane_height = int(parts[1])
-                except ValueError:
-                    pass
+        # Full-screen apps (vim, htop, copilot CLI) use the alternate screen.
+        state = query_pane_state()
+        alternate_on = state["alternate_on"] == 1
 
         if alternate_on:
-            # Full scrollback (history + visible) without -a.  The last
-            # pane_height lines are the fullscreen app's visible content;
-            # everything before is the shell scrollback history.
-            full_cmd = tmux_base_cmd() + [
-                "capture-pane", "-e", "-p", "-t", args.session, "-S", "-"
+            # Under-app shell scrollback lives in the base ("-a") grid; the
+            # plain capture is the app itself. Replay the base grid so it
+            # reappears when the user exits the app. (The old code mis-read the
+            # no-"-a" capture as history and leaked the app's top lines.)
+            base_cmd = tmux_base_cmd() + [
+                "capture-pane", "-e", "-p", "-a", "-t", args.session
             ]
-            full = subprocess.run(full_cmd, capture_output=True, text=True, timeout=5)
-            if full.returncode == 0 and full.stdout:
-                lines = full.stdout.split("\n")
-                if len(lines) > pane_height:
-                    history_lines = lines[:-(pane_height)]
-                    history = "\r\n".join(l for l in history_lines)
-                    if history.strip():
-                        # Write shell history into VS Code's main buffer.
-                        sys.stdout.buffer.write(history.encode("utf-8", errors="replace"))
-                        sys.stdout.buffer.write(b"\x1b[0m\r\n")
-                        # Push the history into scrollback by filling the
-                        # visible area with blank lines, then clearing.
-                        # This forces the terminal to scroll the history
-                        # text up into the scrollback buffer.
-                        sys.stdout.buffer.write(b"\r\n" * pane_height)
-                        sys.stdout.buffer.write(b"\x1b[H\x1b[J")  # home + clear visible
-                        sys.stdout.buffer.flush()
+            base = subprocess.run(base_cmd, capture_output=True, text=True, timeout=5)
+            if base.returncode == 0 and base.stdout:
+                base_text = base.stdout.rstrip("\n")  # drop trailing blank rows
+                if base_text.strip():
+                    sys.stdout.buffer.write(
+                        base_text.replace("\n", "\r\n").encode("utf-8", errors="replace")
+                    )
+                    sys.stdout.buffer.write(b"\x1b[0m\r\n")
+                    sys.stdout.buffer.flush()
 
             # Now enter alt screen and draw the fullscreen app's content.
             vis_cmd = tmux_base_cmd() + [
@@ -138,6 +235,17 @@ def replay_history():
                 text = vis.stdout.replace("\n", "\r\n")
                 sys.stdout.buffer.write(text.encode("utf-8", errors="replace"))
             sys.stdout.buffer.write(b"\x1b[0m")
+
+            # Restore the modes tmux never re-sends on attach (mouse, cursor
+            # keys, keypad), then cursor visibility + position (last, so the
+            # caret lands where the app expects — e.g. inside its input box).
+            sys.stdout.buffer.write(build_mode_restore(state))
+            sys.stdout.buffer.write(
+                b"\x1b[?25h" if state.get("cursor_flag") else b"\x1b[?25l"
+            )
+            sys.stdout.buffer.write(
+                b"\x1b[%d;%dH" % (state["cursor_y"] + 1, state["cursor_x"] + 1)
+            )
             sys.stdout.buffer.flush()
             return True
         else:
@@ -232,6 +340,21 @@ def main():
         old_settings = termios.tcgetattr(sys.stdin.fileno())
         tty.setraw(sys.stdin.fileno())
 
+    # Sync tmux's background to VS Code's real theme background so tmux answers
+    # apps' OSC 11 queries correctly (else it replies black — see helper above).
+    stdin_leftover = b""
+    if old_settings is not None:
+        bg_color, stdin_leftover = query_terminal_bg()
+        if bg_color:
+            try:
+                os.write(
+                    master_fd,
+                    f'set-option -w window-style "bg={bg_color}"\n'
+                    f'set-option -w window-active-style "bg={bg_color}"\n'.encode(),
+                )
+            except Exception:
+                pass
+
     def cleanup():
         nonlocal old_settings
         if old_settings is not None:
@@ -282,8 +405,8 @@ def main():
         stdin_fd = sys.stdin.fileno()
 
         # Input batching: accumulate bytes and flush every ~2ms
-        input_buf = bytearray()
-        last_input_time = 0.0
+        input_buf = bytearray(stdin_leftover)
+        last_input_time = time.monotonic() if stdin_leftover else 0.0
 
         while not exiting:
             # Compute timeout: if we have buffered input, use a short timeout
