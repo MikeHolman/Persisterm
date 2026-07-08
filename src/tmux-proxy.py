@@ -44,29 +44,29 @@ def unescape_output(data):
     """
     Unescape tmux control-mode %output data.
     tmux escapes non-printable bytes as octal \\NNN and backslash as \\\\.
-    Returns raw bytes suitable for writing to stdout.
+    Takes and returns raw bytes — the payload carries literal UTF-8 (e.g.
+    box-drawing chars), so we must never decode/re-encode it (a multibyte
+    sequence split across reads would otherwise corrupt into U+FFFD).
     """
     result = bytearray()
     i = 0
-    while i < len(data):
-        if data[i] == '\\' and i + 1 < len(data):
-            if data[i + 1] == '\\':
+    n = len(data)
+    while i < n:
+        if data[i] == 0x5C and i + 1 < n:  # backslash
+            if data[i + 1] == 0x5C:
                 result.append(0x5C)  # literal backslash
                 i += 2
-            elif (i + 3 < len(data) and
-                  data[i+1] in '01234567' and
-                  data[i+2] in '01234567' and
-                  data[i+3] in '01234567'):
-                val = int(data[i+1:i+4], 8)
-                result.append(val & 0xFF)
+            elif (i + 3 < n and
+                  0x30 <= data[i+1] <= 0x37 and
+                  0x30 <= data[i+2] <= 0x37 and
+                  0x30 <= data[i+3] <= 0x37):
+                result.append(int(data[i+1:i+4], 8) & 0xFF)
                 i += 4
             else:
-                # Unknown escape — encode the backslash as UTF-8
-                result.extend(data[i].encode("utf-8"))
+                result.append(data[i])  # unknown escape — keep the backslash
                 i += 1
         else:
-            # Encode each character as UTF-8 (handles non-ASCII safely)
-            result.extend(data[i].encode("utf-8"))
+            result.append(data[i])
             i += 1
     return bytes(result)
 
@@ -297,7 +297,7 @@ def main():
 
     pane_id = "%0"
     exiting = False
-    line_buf = ""
+    line_buf = b""
 
     # Send initial terminal size to tmux.
     cols, rows = get_terminal_size()
@@ -370,35 +370,35 @@ def main():
             pass
 
     def process_control_line(line):
-        """Parse a single line of tmux control mode output."""
+        """Parse a single line (bytes) of tmux control mode output."""
         nonlocal pane_id, exiting
 
-        if line.startswith("%output "):
+        if line.startswith(b"%output "):
             # %output %<pane-id> <escaped-data>
             rest = line[8:]  # after "%output "
-            space = rest.find(" ")
+            space = rest.find(b" ")
             if space > 0:
-                pane_id = rest[:space]
+                pane_id = rest[:space].decode("ascii", errors="replace")
                 escaped = rest[space + 1:]
                 raw = unescape_output(escaped)
                 sys.stdout.buffer.write(raw)
                 sys.stdout.buffer.flush()
 
-        elif line.startswith("%extended-output "):
+        elif line.startswith(b"%extended-output "):
             # %extended-output %<pane-id> <age> ... : <escaped-data>
             # New format in tmux 3.4+ with pause-after.
-            colon_idx = line.find(" : ")
+            colon_idx = line.find(b" : ")
             if colon_idx > 0:
                 # Extract pane-id from after "%extended-output "
                 parts = line[17:colon_idx].split()
                 if parts:
-                    pane_id = parts[0]
+                    pane_id = parts[0].decode("ascii", errors="replace")
                 escaped = line[colon_idx + 3:]
                 raw = unescape_output(escaped)
                 sys.stdout.buffer.write(raw)
                 sys.stdout.buffer.flush()
 
-        elif line.startswith("%exit"):
+        elif line.startswith(b"%exit"):
             exiting = True
 
     try:
@@ -436,20 +436,21 @@ def main():
                 if not data:
                     break
 
-                # Parse control mode output line by line.
-                text = data.decode("utf-8", errors="replace")
-                line_buf += text
-                lines = line_buf.split("\n")
+                # Parse control mode output line by line, at the BYTE level.
+                # %output payloads carry literal UTF-8, so decoding here would
+                # corrupt multibyte chars split across reads (border artifacts).
+                line_buf += data
+                lines = line_buf.split(b"\n")
                 line_buf = lines.pop()  # keep incomplete last line
 
                 for line in lines:
-                    line = line.rstrip("\r")
+                    line = line.rstrip(b"\r")
                     # tmux wraps the initial output in DCS (ESC P 1000p).
                     # Strip that wrapper — it only appears at the start.
-                    if line.startswith("\x1bP1000p"):
+                    if line.startswith(b"\x1bP1000p"):
                         line = line[7:]
                     # ST (String Terminator \x1b\\) can end the DCS block.
-                    if line == "\x1b\\":
+                    if line == b"\x1b\\":
                         continue
                     if line:
                         process_control_line(line)
