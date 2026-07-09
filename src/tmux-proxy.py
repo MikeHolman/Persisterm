@@ -80,8 +80,8 @@ def bytes_to_hex(data):
 # tmux answers an app's OSC 11 (background) query itself, with black, since it
 # can't know VS Code's real theme background.  Apps (e.g. Copilot CLI) that
 # shade their input box from that answer then render it black.  We query VS
-# Code's real background once and push it into tmux's window-style so tmux
-# answers correctly.
+# Code's real background once, use it as the global fallback for hidden tabs,
+# and keep a per-window override for windows with a different theme.
 
 _OSC11_RE = re.compile(
     rb"\x1b\]11;rgb:([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})(?:\x07|\x1b\\)"
@@ -340,8 +340,8 @@ def main():
         old_settings = termios.tcgetattr(sys.stdin.fileno())
         tty.setraw(sys.stdin.fileno())
 
-    # Sync tmux's background to VS Code's real theme background so tmux answers
-    # apps' OSC 11 queries correctly (else it replies black — see helper above).
+    # Set a global fallback for tabs that do not answer while hidden, plus this
+    # window's override in case separate VS Code windows use different themes.
     stdin_leftover = b""
     if old_settings is not None:
         bg_color, stdin_leftover = query_terminal_bg()
@@ -349,8 +349,12 @@ def main():
             try:
                 os.write(
                     master_fd,
-                    f'set-option -w window-style "bg={bg_color}"\n'
-                    f'set-option -w window-active-style "bg={bg_color}"\n'.encode(),
+                    (
+                        f'set-option -g window-style "bg={bg_color}"\n'
+                        f'set-option -g window-active-style "bg={bg_color}"\n'
+                        f'set-option -w -t {args.session} window-style "bg={bg_color}"\n'
+                        f'set-option -w -t {args.session} window-active-style "bg={bg_color}"\n'
+                    ).encode(),
                 )
             except Exception:
                 pass
