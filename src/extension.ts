@@ -22,6 +22,7 @@
  */
 
 import * as vscode from "vscode";
+import { workspaceSessionPrefix } from "./session-names";
 import * as tmux from "./tmux";
 
 /* ------------------------------------------------------------------ */
@@ -87,10 +88,26 @@ interface Config {
 }
 
 function cfg(): Config {
-  const c = vscode.workspace.getConfiguration("persisterm");
+  const firstFolder = vscode.workspace.workspaceFolders?.[0];
+  const c = vscode.workspace.getConfiguration("persisterm", firstFolder?.uri);
+  const basePrefix = c.get<string>("sessionPrefix", "persisterm");
+  const inspectedPrefix = c.inspect<string>("sessionPrefix");
+  const explicitlyConfigured = inspectedPrefix !== undefined && [
+    inspectedPrefix.globalValue,
+    inspectedPrefix.workspaceValue,
+    inspectedPrefix.workspaceFolderValue,
+  ].some((value) => value !== undefined);
+
+  // Explicit configuration preserves the old exact-prefix behaviour. Without
+  // it, folderless windows use the legacy global namespace and workspaces use
+  // the first folder URI as a stable automatic scope.
   return {
     autoReattach: c.get<boolean>("autoReattach", true),
-    sessionPrefix: c.get<string>("sessionPrefix", "persisterm"),
+    sessionPrefix: workspaceSessionPrefix(
+      basePrefix,
+      firstFolder?.uri.toString(),
+      explicitlyConfigured,
+    ),
     showStatusBar: c.get<boolean>("showStatusBar", true),
   };
 }

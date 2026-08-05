@@ -2,8 +2,11 @@
 src/**
 !src/tmux-proxy.py
 node_modules/**
+test/**
 .git/**
 .gitignore
+eslint.config.js
 tsconfig.json
 **/*.ts
 **/*.map
+*.vsix

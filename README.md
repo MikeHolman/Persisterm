@@ -9,8 +9,8 @@ Persisterm backs every terminal with a [tmux](https://github.com/tmux/tmux) sess
 ```
  VS Code Terminal tab       proxy       tmux session
 ┌─────────────────────┐   ┌───────┐   ┌──────────────────┐
-│  Persist: 0         │◄─►│ proxy │◄─►│  persisterm-0    │
-│  Persist: 1         │◄─►│ proxy │◄─►│  persisterm-1    │
+│  Persist: 0         │◄─►│ proxy │◄─►│ persisterm-…-0   │
+│  Persist: 1         │◄─►│ proxy │◄─►│ persisterm-…-1   │
 └─────────────────────┘   └───────┘   └──────────────────┘
          │                                     │
     (disconnect)                          (keeps running)
@@ -56,7 +56,7 @@ A lightweight Python proxy bridges VS Code's terminal and tmux's **control mode*
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `persisterm.autoReattach` | `true` | Automatically reattach to surviving sessions on startup |
-| `persisterm.sessionPrefix` | `"persisterm"` | Prefix for tmux session names.  Change this if you run multiple workspaces on the same host to keep sessions separate. |
+| `persisterm.sessionPrefix` | `"persisterm"` | Session prefix. When explicitly configured, it is used exactly as written; otherwise folder workspaces are isolated automatically. |
 | `persisterm.showStatusBar` | `true` | Show the persistent-session count in the status bar |
 
 ## Keyboard shortcut
@@ -74,8 +74,21 @@ A lightweight Python proxy bridges VS Code's terminal and tmux's **control mode*
   `terminal.integrated.defaultProfile.linux` to `Persistent Terminal (tmux)`.  
   Every new terminal will then be tmux-backed automatically.
 
-- **Multiple workspaces on one host**: set a unique `persisterm.sessionPrefix`
-  per workspace (e.g. `proj-a`, `proj-b`) to avoid cross-talk.
+- **Your normal remote shell is preserved**: Persisterm uses the remote
+  account's `$SHELL` (falling back to its passwd login shell) instead of
+  hardcoding Bash. Bash login profiles, Zsh's `.zshenv`/`.zprofile`/`.zshrc`/
+  `.zlogin`, and Fish's login configuration run in their normal order, while a
+  prompt hook refreshes VS Code integration variables. If a Bash profile sets
+  `PROMPT_COMMAND`, it should append to (rather than replace) the inherited
+  value. Existing panes keep the shell they were created with; open a new
+  terminal after changing `$SHELL` or upgrading from an older version.
+
+- **Multiple workspaces on one host are isolated automatically**: Persisterm
+  adds a short hash of the first workspace folder URI to the session prefix.
+  Folderless windows keep using the global prefix and can reattach to legacy
+  sessions such as `persisterm-0`. An explicitly configured
+  `persisterm.sessionPrefix` is used unchanged, preserving existing manual
+  workspace isolation and its sessions.
 
 - **Intentional close vs. disconnect**: closing a terminal tab in VS Code
   kills the underlying tmux session (to avoid leaks).  Disconnecting leaves
@@ -86,9 +99,11 @@ A lightweight Python proxy bridges VS Code's terminal and tmux's **control mode*
 ```bash
 cd persisterm
 npm install
-npm run compile          # one-shot build
-npm run watch            # incremental rebuild
-npm run package          # produces a .vsix
+npm run compile                    # one-shot build
+npm run watch                      # incremental rebuild
+npm test                           # shell startup + tmux integration tests
+npm run lint                       # TypeScript ESLint checks
+npm run package                    # produces a .vsix
 ```
 
 ## License
