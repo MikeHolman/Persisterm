@@ -135,6 +135,73 @@ test("fish init runs after the user's config and installs its prompt hook", {
   }
 });
 
+for (const spec of [
+  {
+    name: "bash",
+    path: "/bin/bash",
+    marker: "PERSISTERM_BASH_LOGIN_LOADED",
+    setup(home) {
+      fs.writeFileSync(path.join(home, ".hushlogin"), "");
+      fs.writeFileSync(path.join(home, ".bash_profile"),
+        "echo PERSISTERM_BASH_LOGIN_LOADED\n");
+    },
+  },
+  {
+    name: "fish",
+    path: "/usr/bin/fish",
+    marker: "PERSISTERM_FISH_CONFIG_LOADED",
+    setup(home) {
+      const fishConfig = path.join(home, ".config", "fish");
+      fs.mkdirSync(fishConfig, { recursive: true });
+      fs.writeFileSync(path.join(fishConfig, "config.fish"),
+        "echo PERSISTERM_FISH_CONFIG_LOADED\n");
+    },
+  },
+]) {
+  test(`tmux starts ${spec.name} and loads its user startup file`, {
+    skip: !fs.existsSync(spec.path) || spawnSync("tmux", ["-V"]).status !== 0,
+  }, () => {
+    const layout = tempLayout();
+    const socket = `persisterm-test-${spec.name}-${process.pid}-${Date.now()}`;
+    const session = "shell-test";
+    try {
+      writeGeneratedFiles(layout);
+      fs.writeFileSync(layout.env,
+        "_persisterm_refresh() { export PERSISTERM_REFRESHED=1; }\n_persisterm_refresh\n");
+      spec.setup(layout.home);
+      const config = path.join(layout.config, "tmux.conf");
+      fs.writeFileSync(config, tmux.buildTmuxConfig(spec.path, layout.launcher));
+
+      const started = spawnSync("tmux", [
+        "-f", config, "-L", socket, "new-session", "-d", "-s", session,
+      ], {
+        encoding: "utf8",
+        env: { ...process.env, HOME: layout.home },
+      });
+      assert.equal(started.status, 0, started.stderr);
+
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+      const pane = spawnSync("tmux", [
+        "-L", socket, "display-message", "-p", "-t", session,
+        "#{pane_current_command}",
+      ], { encoding: "utf8" });
+      assert.equal(pane.status, 0, pane.stderr);
+      assert.equal(pane.stdout.trim(), spec.name);
+
+      spawnSync("tmux", ["-L", socket, "send-keys", "-t", session, "Enter"]);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+      const captured = spawnSync("tmux", [
+        "-L", socket, "capture-pane", "-p", "-S", "-", "-t", session,
+      ], { encoding: "utf8" });
+      assert.equal(captured.status, 0, captured.stderr);
+      assert.match(captured.stdout, new RegExp(spec.marker));
+    } finally {
+      spawnSync("tmux", ["-L", socket, "kill-server"]);
+      fs.rmSync(layout.root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("tmux starts zsh as the pane process through the generated launcher", {
   skip: !fs.existsSync("/usr/bin/zsh") || spawnSync("tmux", ["-V"]).status !== 0,
 }, () => {
