@@ -10,6 +10,17 @@ test("folderless windows keep the legacy global prefix", () => {
   assert.equal(workspaceSessionPrefix("persisterm"), "persisterm");
 });
 
+test("explicit prefixes keep their legacy exact form", () => {
+  assert.equal(
+    workspaceSessionPrefix(
+      "project-a",
+      "vscode-remote://ssh-remote+host/home/user/project-a",
+      true,
+    ),
+    "project-a",
+  );
+});
+
 test("workspace folders get stable, distinct prefixes", () => {
   const first = workspaceSessionPrefix(
     "persisterm",

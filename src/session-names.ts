@@ -4,13 +4,15 @@ import { createHash } from "crypto";
  * Scope a tmux session prefix to a workspace folder.
  *
  * Folderless windows intentionally keep the base prefix so they continue to
- * see legacy global sessions such as `persisterm-0`.
+ * see legacy global sessions such as `persisterm-0`. An explicitly configured
+ * prefix is also kept unchanged for compatibility with manual isolation.
  */
 export function workspaceSessionPrefix(
   basePrefix: string,
   workspaceFolderUri?: string,
+  explicitlyConfigured = false,
 ): string {
-  if (!workspaceFolderUri) {
+  if (!workspaceFolderUri || explicitlyConfigured) {
     return basePrefix;
   }
 

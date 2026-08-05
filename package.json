@@ -61,7 +61,7 @@
         "persisterm.sessionPrefix": {
           "type": "string",
           "default": "persisterm",
-          "description": "Base prefix for tmux session names. Workspaces with a folder are isolated automatically; folderless windows use this prefix directly."
+          "description": "Prefix for tmux session names. When explicitly configured, it is used exactly as written; otherwise workspaces with a folder are isolated automatically."
         },
         "persisterm.showStatusBar": {
           "type": "boolean",

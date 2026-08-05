@@ -56,7 +56,7 @@ A lightweight Python proxy bridges VS Code's terminal and tmux's **control mode*
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `persisterm.autoReattach` | `true` | Automatically reattach to surviving sessions on startup |
-| `persisterm.sessionPrefix` | `"persisterm"` | Base prefix for tmux session names. Workspaces with a folder are isolated automatically. |
+| `persisterm.sessionPrefix` | `"persisterm"` | Session prefix. When explicitly configured, it is used exactly as written; otherwise folder workspaces are isolated automatically. |
 | `persisterm.showStatusBar` | `true` | Show the persistent-session count in the status bar |
 
 ## Keyboard shortcut
@@ -86,7 +86,9 @@ A lightweight Python proxy bridges VS Code's terminal and tmux's **control mode*
 - **Multiple workspaces on one host are isolated automatically**: Persisterm
   adds a short hash of the first workspace folder URI to the session prefix.
   Folderless windows keep using the global prefix and can reattach to legacy
-  sessions such as `persisterm-0`.
+  sessions such as `persisterm-0`. An explicitly configured
+  `persisterm.sessionPrefix` is used unchanged, preserving existing manual
+  workspace isolation and its sessions.
 
 - **Intentional close vs. disconnect**: closing a terminal tab in VS Code
   kills the underlying tmux session (to avoid leaks).  Disconnecting leaves
