@@ -74,6 +74,15 @@ A lightweight Python proxy bridges VS Code's terminal and tmux's **control mode*
   `terminal.integrated.defaultProfile.linux` to `Persistent Terminal (tmux)`.  
   Every new terminal will then be tmux-backed automatically.
 
+- **Your normal remote shell is preserved**: Persisterm uses the remote
+  account's `$SHELL` (falling back to its passwd login shell) instead of
+  hardcoding Bash. Bash login profiles, Zsh's `.zshenv`/`.zprofile`/`.zshrc`/
+  `.zlogin`, and Fish's login configuration run in their normal order, while a
+  prompt hook refreshes VS Code integration variables. If a Bash profile sets
+  `PROMPT_COMMAND`, it should append to (rather than replace) the inherited
+  value. Existing panes keep the shell they were created with; open a new
+  terminal after changing `$SHELL` or upgrading from an older version.
+
 - **Multiple workspaces on one host**: set a unique `persisterm.sessionPrefix`
   per workspace (e.g. `proj-a`, `proj-b`) to avoid cross-talk.
 
@@ -86,9 +95,10 @@ A lightweight Python proxy bridges VS Code's terminal and tmux's **control mode*
 ```bash
 cd persisterm
 npm install
-npm run compile          # one-shot build
-npm run watch            # incremental rebuild
-npm run package          # produces a .vsix
+npm run compile                    # one-shot build
+npm run watch                      # incremental rebuild
+npm test                           # shell startup + tmux integration tests
+npx @vscode/vsce package           # produces a .vsix
 ```
 
 ## License
