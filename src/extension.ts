@@ -22,6 +22,7 @@
  */
 
 import * as vscode from "vscode";
+import { workspaceSessionPrefix } from "./session-names";
 import * as tmux from "./tmux";
 
 /* ------------------------------------------------------------------ */
@@ -88,9 +89,13 @@ interface Config {
 
 function cfg(): Config {
   const c = vscode.workspace.getConfiguration("persisterm");
+  const basePrefix = c.get<string>("sessionPrefix", "persisterm");
+  // Keep folderless windows in the legacy global namespace. For regular and
+  // multi-root workspaces, the first folder provides a stable scope.
+  const workspaceFolderUri = vscode.workspace.workspaceFolders?.[0]?.uri.toString();
   return {
     autoReattach: c.get<boolean>("autoReattach", true),
-    sessionPrefix: c.get<string>("sessionPrefix", "persisterm"),
+    sessionPrefix: workspaceSessionPrefix(basePrefix, workspaceFolderUri),
     showStatusBar: c.get<boolean>("showStatusBar", true),
   };
 }

@@ -15,6 +15,7 @@ import { execSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { isSessionForPrefix } from "./session-names";
 
 /* ------------------------------------------------------------------ */
 /*  Dedicated socket & configuration                                   */
@@ -446,7 +447,7 @@ export function version(): [number, number] | undefined {
 }
 
 /**
- * List every tmux session whose name starts with `prefix`.
+ * List every tmux session whose name has the exact form `<prefix>-N`.
  * Returns an empty array when the tmux server is not running.
  */
 export function listSessions(prefix: string): TmuxSession[] {
@@ -468,7 +469,7 @@ export function listSessions(prefix: string): TmuxSession[] {
           created: parseInt(created, 10),
         };
       })
-      .filter((s) => s.name.startsWith(prefix));
+      .filter((s) => isSessionForPrefix(s.name, prefix));
   } catch {
     return [];
   }

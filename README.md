@@ -9,8 +9,8 @@ Persisterm backs every terminal with a [tmux](https://github.com/tmux/tmux) sess
 ```
  VS Code Terminal tab       proxy       tmux session
 ┌─────────────────────┐   ┌───────┐   ┌──────────────────┐
-│  Persist: 0         │◄─►│ proxy │◄─►│  persisterm-0    │
-│  Persist: 1         │◄─►│ proxy │◄─►│  persisterm-1    │
+│  Persist: 0         │◄─►│ proxy │◄─►│ persisterm-…-0   │
+│  Persist: 1         │◄─►│ proxy │◄─►│ persisterm-…-1   │
 └─────────────────────┘   └───────┘   └──────────────────┘
          │                                     │
     (disconnect)                          (keeps running)
@@ -56,7 +56,7 @@ A lightweight Python proxy bridges VS Code's terminal and tmux's **control mode*
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `persisterm.autoReattach` | `true` | Automatically reattach to surviving sessions on startup |
-| `persisterm.sessionPrefix` | `"persisterm"` | Prefix for tmux session names.  Change this if you run multiple workspaces on the same host to keep sessions separate. |
+| `persisterm.sessionPrefix` | `"persisterm"` | Base prefix for tmux session names. Workspaces with a folder are isolated automatically. |
 | `persisterm.showStatusBar` | `true` | Show the persistent-session count in the status bar |
 
 ## Keyboard shortcut
@@ -83,8 +83,10 @@ A lightweight Python proxy bridges VS Code's terminal and tmux's **control mode*
   value. Existing panes keep the shell they were created with; open a new
   terminal after changing `$SHELL` or upgrading from an older version.
 
-- **Multiple workspaces on one host**: set a unique `persisterm.sessionPrefix`
-  per workspace (e.g. `proj-a`, `proj-b`) to avoid cross-talk.
+- **Multiple workspaces on one host are isolated automatically**: Persisterm
+  adds a short hash of the first workspace folder URI to the session prefix.
+  Folderless windows keep using the global prefix and can reattach to legacy
+  sessions such as `persisterm-0`.
 
 - **Intentional close vs. disconnect**: closing a terminal tab in VS Code
   kills the underlying tmux session (to avoid leaks).  Disconnecting leaves
