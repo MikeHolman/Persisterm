@@ -98,7 +98,8 @@ npm install
 npm run compile                    # one-shot build
 npm run watch                      # incremental rebuild
 npm test                           # shell startup + tmux integration tests
-npx @vscode/vsce package           # produces a .vsix
+npm run lint                       # TypeScript ESLint checks
+npm run package                    # produces a .vsix
 ```
 
 ## License
